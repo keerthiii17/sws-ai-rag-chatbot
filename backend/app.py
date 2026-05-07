@@ -25,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load chunks
+# Load processed chunks
 with open("chunks.json", "r", encoding="utf-8") as f:
     chunks = json.load(f)
 
@@ -43,7 +43,7 @@ async def chat(request: ChatRequest):
     # Current question
     current_question = request.question.lower()
 
-    # Previous user question
+    # Previous user query
     previous_context = ""
 
     for item in reversed(conversation_history):
@@ -57,7 +57,7 @@ async def chat(request: ChatRequest):
 
             break
 
-    # Combined query
+    # Combined conversational query
     combined_query = (
         previous_context + " " + current_question
     ).lower()
@@ -73,43 +73,112 @@ async def chat(request: ChatRequest):
 
         score = 0
 
+        # Basic keyword scoring
         for word in question_words:
 
             if word in text:
                 score += 1
 
         # Smart boosting
+
+        # Sick leave
         if "sick leave" in text and "sick" in combined_query:
             score += 5
 
+        # Annual leave
         if "annual leave" in text and "leave" in combined_query:
             score += 3
 
+        # Password policy
         if "password" in text and "password" in combined_query:
             score += 5
 
-        if "work from home" in text and "wfh" in combined_query:
+        # WFH
+        if "work from home" in text and (
+            "wfh" in combined_query or
+            "work from home" in combined_query
+        ):
             score += 5
 
+        # Health insurance / medical benefits
+        if (
+            "insurance" in combined_query or
+            "health" in combined_query or
+            "medical" in combined_query
+        ):
+
+            if (
+                "insurance" in text or
+                "medical" in text or
+                "health" in text or
+                "coverage" in text or
+                "benefit" in text
+            ):
+
+                score += 8
+
+        # Benefits and compensation
+        if (
+            "benefits" in combined_query or
+            "compensation" in combined_query
+        ):
+
+            if (
+                "benefit" in text or
+                "compensation" in text or
+                "insurance" in text
+            ):
+
+                score += 5
+
+        # Performance review
+        if (
+            "performance" in combined_query or
+            "review" in combined_query
+        ):
+
+            if (
+                "performance" in text or
+                "review" in text or
+                "evaluation" in text
+            ):
+
+                score += 5
+
+        # Resignation
+        if (
+            "resignation" in combined_query or
+            "notice period" in combined_query
+        ):
+
+            if (
+                "resignation" in text or
+                "notice period" in text or
+                "exit" in text
+            ):
+
+                score += 5
+
+        # Keep only relevant chunks
         if score > 0:
 
             scored_chunks.append(
                 (score, chunk)
             )
 
-    # Sort highest relevance
+    # Sort by relevance
     scored_chunks.sort(
         key=lambda x: x[0],
         reverse=True
     )
 
-    # Top retrieved chunks
+    # Retrieve top chunks
     matched_chunks = [
         item[1]
         for item in scored_chunks[:6]
     ]
 
-    # Context
+    # Build context
     context = "\n\n".join([
         chunk["text"]
         for chunk in matched_chunks
@@ -132,9 +201,9 @@ STRICT RULES:
 
 ANSWER STYLE:
 - Give professional and structured answers.
-- Use bullet points when useful.
+- Use bullet points or sections when useful.
 - Include related policy details ONLY if present in the context.
-- Keep responses concise but informative.
+- Keep answers concise but informative.
 - Mention only facts from company documents.
 
 Conversation History:
@@ -147,7 +216,7 @@ Employee Question:
 {request.question}
 """
 
-    # OpenRouter API request
+    # OpenRouter API call
     response = requests.post(
 
         url="https://openrouter.ai/api/v1/chat/completions",
@@ -176,9 +245,11 @@ Employee Question:
 
     # Safe fallback
     try:
+
         answer = result["choices"][0]["message"]["content"]
 
     except:
+
         answer = "Error generating response."
 
     # Save memory

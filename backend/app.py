@@ -4,12 +4,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv
 
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-
-from langchain_openai import ChatOpenAI
+import requests
+import os
+import json
 
 load_dotenv()
+
+OPENROUTER_API_KEY = os.getenv(
+    "OPENROUTER_API_KEY"
+)
 
 app = FastAPI()
 
@@ -22,24 +25,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Embedding model
-embedding_model = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+# Load chunks
+with open("chunks.json", "r", encoding="utf-8") as f:
+    chunks = json.load(f)
 
-# Load ChromaDB
-db = Chroma(
-    persist_directory="chroma_db",
-    embedding_function=embedding_model
-)
-
-# OpenAI LLM
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0
-)
-
-# MEMORY STORAGE
+# Conversation memory
 conversation_history = []
 
 class ChatRequest(BaseModel):
@@ -50,26 +40,68 @@ async def chat(request: ChatRequest):
 
     global conversation_history
 
-    # Retrieve relevant chunks
-    docs = db.similarity_search(
-        request.question,
-        k=4
+    # User question words
+    question_words = request.question.lower().split()
+
+    # Score chunks
+    scored_chunks = []
+
+    for chunk in chunks:
+
+        text = chunk["text"].lower()
+
+        score = 0
+
+        for word in question_words:
+
+            if word in text:
+                score += 1
+
+        if score > 0:
+
+            scored_chunks.append(
+                (score, chunk)
+            )
+
+    # Sort by highest score
+    scored_chunks.sort(
+        key=lambda x: x[0],
+        reverse=True
     )
 
+    # Retrieve top chunks
+    matched_chunks = [
+        item[1]
+        for item in scored_chunks[:6]
+    ]
+
+    # Context
     context = "\n\n".join([
-        doc.page_content for doc in docs
+        chunk["text"]
+        for chunk in matched_chunks
     ])
 
-    # Last few messages memory
-    memory_context = "\n".join(conversation_history[-6:])
+    # Conversation memory
+    memory_context = "\n".join(
+        conversation_history[-6:]
+    )
 
+    # Prompt
     prompt = f"""
 You are an internal company policy assistant.
 
-Answer ONLY from the provided context.
-
-If answer is unavailable, say:
+STRICT RULES:
+- Answer ONLY using the provided document context.
+- Do NOT invent or hallucinate information.
+- If the answer is not available in the context, respond exactly:
 "I don't have that information in the company documents."
+
+ANSWER STYLE:
+- Give professional and structured answers.
+- Use bullet points or sections when useful.
+- Include related policy details ONLY if they exist in the context.
+- Keep the response concise but informative.
+- Mention only facts from the provided documents.
 
 Conversation History:
 {memory_context}
@@ -77,28 +109,62 @@ Conversation History:
 Document Context:
 {context}
 
-Question:
+Employee Question:
 {request.question}
 """
 
-    response = llm.invoke(prompt)
+    # OpenRouter request
+    response = requests.post(
 
-    # Save conversation
+        url="https://openrouter.ai/api/v1/chat/completions",
+
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        },
+
+        json={
+
+            "model": "openai/gpt-3.5-turbo",
+
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+
+        }
+
+    )
+
+    result = response.json()
+
+    answer = result["choices"][0]["message"]["content"]
+
+    # Save conversation memory
     conversation_history.append(
         f"User: {request.question}"
     )
 
     conversation_history.append(
-        f"Assistant: {response.content}"
+        f"Assistant: {answer}"
     )
 
-    # Sources
+    # Clean source names
     sources = list(set([
-        doc.metadata["source"]
-        for doc in docs
+
+        chunk["source"]
+        .replace(".pdf", "")
+        .replace("SWS-AI-", "")
+        .replace("-", " ")
+        .title()
+
+        for chunk in matched_chunks
+
     ]))
 
     return {
-        "answer": response.content,
+        "answer": answer,
         "sources": sources
     }

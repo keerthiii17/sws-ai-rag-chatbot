@@ -1,35 +1,27 @@
 import os
-from dotenv import load_dotenv
+import json
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-
-load_dotenv()
-
 DATA_PATH = "data"
-CHROMA_PATH = "chroma_db"
-
-# Embedding model
-embedding_model = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
 
 documents = []
 
-# Load PDFs
+# Load all PDFs
 for file in os.listdir(DATA_PATH):
 
     if file.endswith(".pdf"):
 
         pdf_path = os.path.join(DATA_PATH, file)
 
+        print(f"Loading: {file}")
+
         loader = PyPDFLoader(pdf_path)
 
         docs = loader.load()
 
+        # Add metadata
         for i, doc in enumerate(docs):
 
             doc.metadata["source"] = file
@@ -37,9 +29,9 @@ for file in os.listdir(DATA_PATH):
 
         documents.extend(docs)
 
-print(f"Loaded {len(documents)} pages")
+print(f"\nLoaded {len(documents)} pages")
 
-# Chunking
+# Split into chunks
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=500,
     chunk_overlap=50
@@ -47,20 +39,31 @@ splitter = RecursiveCharacterTextSplitter(
 
 chunks = splitter.split_documents(documents)
 
-# Add chunk ids
-for i, chunk in enumerate(chunks):
-
-    chunk.metadata["chunk_id"] = i
-
 print(f"Created {len(chunks)} chunks")
 
-# Store in ChromaDB
-db = Chroma.from_documents(
-    documents=chunks,
-    embedding=embedding_model,
-    persist_directory=CHROMA_PATH
-)
+# Save chunks
+chunk_data = []
 
-db.persist()
+for chunk in chunks:
 
-print("Chroma DB created successfully")
+    chunk_data.append({
+
+        "text": chunk.page_content,
+
+        "source": chunk.metadata["source"],
+
+        "page": chunk.metadata["page"]
+
+    })
+
+# Save as JSON
+with open("chunks.json", "w", encoding="utf-8") as f:
+
+    json.dump(
+        chunk_data,
+        f,
+        indent=2,
+        ensure_ascii=False
+    )
+
+print("\nchunks.json created successfully")
